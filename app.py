@@ -1,3 +1,5 @@
+import os
+import tempfile
 import streamlit as st
 import numpy as np
 from langchain.document_loaders import PyPDFLoader
@@ -11,122 +13,117 @@ from langchain.chains import RetrievalQA
 import faiss
 from langchain.docstore import InMemoryDocstore
 from dotenv import load_dotenv
-import os
 from conn import *
-load_dotenv()
-GOOGLE_API_KEY=os.environ["GOOGLE_API_KEY"]
-model = ChatGoogleGenerativeAI(
-    model="gemini-pro",
-    google_api_key=GOOGLE_API_KEY,
-    temperature=0.2,
-    convert_system_message_to_human=True
-)
 
+# Load environment variables
+load_dotenv()
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+
+# Streamlit configuration
 st.set_page_config(
     page_title="Document Summarizer Chatbot",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-#load the document
-# def load_documents(file_path):
-#     try:
-#         # Use PyPDFLoader to load and split PDF documents
-#         loader = PyPDFLoader(file_path)
-#         documents = loader.load()
-#         #  Split the extracted text into documents
-#         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-#         docs = text_splitter.split_documents(documents)  # Updated method to split raw text
-#         return docs
-#     except Exception as e:
-#         # st.error(f"Error loading PDF file: ")
-#         return []
-# def create_vector_store(docs):
-#     try:
-#         # Use Google Generative AI embeddings
-#         embeddings = GoogleGenerativeAIEmbeddings(
-#             model="models/embedding-001",
-#             google_api_key=GOOGLE_API_KEY
-#         )
+
+# Function to load documents
+def load_documents(file_path):
+    try:
+        loader = PyPDFLoader(file_path)
+        documents = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        docs = text_splitter.split_documents(documents)
+        return docs
+    except Exception as e:
+        st.error(f"Error loading PDF file: {str(e)}")
+        return []
+
+# Function to create vector store
+def create_vector_store(docs):
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=GOOGLE_API_KEY
+        )
         
-#         # Create the FAISS vector store from the documents and embeddings
-#         vectorstore = FAISS.from_documents(docs, embeddings)
-#         save_chunks_and_embeddings(docs, embeddings)
-#         # st.write(data)
-#         return vectorstore
+        vectorstore = FAISS.from_documents(docs, embeddings)
+        save_chunks_and_embeddings(docs, embeddings)
+        return vectorstore
+    except Exception as e:
+        st.error(f"Error creating vector store: {str(e)}")
+        return None
+
+# Function to save chunks and embeddings to the database
+def save_chunks_and_embeddings(docs, embeddings):
+    try:
+        for i, doc in enumerate(docs):
+            doc_embedding = embeddings.embed_query(doc.page_content)
+            res = insert_query(doc.page_content, doc_embedding)
+            if res:
+                print('Data inserted successfully')
+    except Exception as e:
+        print(f"Error: {e}")
+
+# Function to insert document into the database
+def insert_document_into_db(doc):
+    # Use a temporary file to save the uploaded PDF and pass its path to the loader
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        temp_file.write(doc.read())
+        temp_file_path = temp_file.name
     
-#     except ModuleNotFoundError as e:
-#         # st.error(f"Module not found: ")
-#         raise
-    
-#     except Exception as e:
-#         # st.error(f"Error creating vector store: ")
-#         raise
-# def save_chunks_and_embeddings(docs, embeddings):
-#     try:
-#         data = []
-#         for i, doc in enumerate(docs):
-#             doc_embedding = embeddings.embed_query(doc.page_content)
-#             data.append({
-#                 "chunk": doc.page_content,
-#                 "embedding": doc_embedding
-#             })
-#             res = insert_query(doc.page_content,doc_embedding)
-            # if res:
-                # print('data inserted sucessfully')
-#         # return data
-#     except Exception as e:
-#         print("error : ",e)
+    # Load and process the document using the temporary file path
+    docs = load_documents(temp_file_path)
+    if docs:
+        create_vector_store(docs)
+        st.success("Document successfully processed and inserted into the database.")
+    else:
+        st.error("Failed to process the document.")
 
+    # Remove the temporary file after processing
+    os.remove(temp_file_path)
 
-# def get_retriever(vectorstore):
-#     if vectorstore:
-#         return vectorstore.as_retriever(search_kwargs={"k":5})
-#     else:
-#         return None
-# docs = load_documents("./policy_workplace_concerns.pdf")
-# # st.write(docs)
-# vectorstore = create_vector_store(docs)
-# # st.write(vectorstore)
-# retriever = get_retriever(vectorstore)
-# # st.write(retriever)
-
+# Function to create FAISS retriever from the database
 def create_faiss_retriever_from_db():
     try:
-        # Fetch documents and embeddings from the database
         docs, embeddings = fetch_chunks_and_embedding()
- 
-        # Check if docs and embeddings are present and their lengths match
-        if not docs or not embeddings or len(docs) != len(embeddings):
-            raise ValueError("The number of documents does not match the number of embeddings.")
- 
-        # Convert embeddings to a NumPy array and ensure it's in the correct data type (float32)
+
+        # Check if the documents and embeddings are correctly fetched
+        if not docs:
+            raise ValueError("No documents found.")
+        if not embeddings:
+            raise ValueError("No embeddings found.")
+        if len(docs) != len(embeddings):
+            raise ValueError(f"Mismatch between the number of documents ({len(docs)}) and embeddings ({len(embeddings)}).")
+
         embeddings_np = np.array(embeddings, dtype=np.float32)
         
-        # Initialize FAISS index with L2 distance and embedding dimension
-        embedding_dim = embeddings_np.shape[1]  # Assuming 2D array
-        # print(embedding_dim)
-        faiss_index = faiss.IndexFlatL2(embedding_dim)  # Use L2 distance for similarity search
+        # Check if embeddings are 2D
+        if len(embeddings_np.shape) != 2:
+            raise ValueError("Embeddings array is not 2-dimensional.")
         
-        # Add embeddings to FAISS index
+        embedding_dim = embeddings_np.shape[1]
+        
+        # Initialize FAISS index with L2 distance and embedding dimension
+        faiss_index = faiss.IndexFlatL2(embedding_dim)
         faiss_index.add(embeddings_np)
- 
+
         # Create documents in LangChain format
         documents = [Document(page_content=doc) for doc in docs]
         
         # Create a mapping from FAISS index to document store IDs
         index_to_docstore_id = {i: str(i) for i in range(len(embeddings))}
         
- 
         # Create document store using LangChain's InMemoryDocstore
         docstore = InMemoryDocstore(dict(zip(index_to_docstore_id.values(), documents)))
- 
+
         # Use the Google Generative AI Embeddings model for embedding (ensure it's properly configured)
         embedding_model = GoogleGenerativeAIEmbeddings(
             model="models/embedding-001",
-            google_api_key=os.getenv("GOOGLE_API_KEY")  # Ensure GOOGLE_API_KEY is set
+            google_api_key=GOOGLE_API_KEY
         )
- 
+
         # Create FAISS vector store
         vectorstore = FAISS(
             embedding_function=embedding_model,
@@ -134,119 +131,110 @@ def create_faiss_retriever_from_db():
             docstore=docstore,
             index_to_docstore_id=index_to_docstore_id
         )
- 
+
         # Return the retriever
         return vectorstore.as_retriever(search_kwargs={"k": 5})
     except Exception as e:
-        print(f"FAISS retriever creation failed: {e}")
+        st.error(f"FAISS retriever creation failed: {str(e)}")
         return None
 
-
+# Function to generate an answer using the model
 def generate_answer(query, retriever):
     try:
-        # Assuming retriever is the one created from the database embeddings
         if retriever is None:
             raise ValueError("Retriever is not initialized")
-        
+
         relevant_docs = retriever.get_relevant_documents(query)
-        # print(relevant_docs)
-        context = "\n".join([doc.page_content for doc in relevant_docs])
         
-        # Create a prompt template
+        # Check if there are any relevant documents
+        if not relevant_docs:
+            raise ValueError("No relevant documents found.")
+        
+        context = "\n".join([doc.page_content for doc in relevant_docs])
+
         prompt_template = """
-            Consider yourself as an AI chatbot. A document is provided to you Your task is to generate a clear and concise answer from the  provided document .If you will not able to find the answer in provided document then generate response related to the word which is present in question.provide response in  more detailed manner.
+            Consider yourself as an AI chatbot. A document is provided to you. Your task is to generate a clear and concise answer from the provided document. If you are not able to find the answer in the provided document, generate a response related to the word present in the question. Provide a response in a more detailed manner.
 
-            context : {context}
-            question: {question}
+            Context: {context}
+            Question: {question}
             Instructions:
-
-            1.If is providing any word instead of a query then consider that word as query and generate response realted to that query.
-            2. Analyze and understand the question and generate response, If question is not appropriate the create a appropriate question by yourself and generate output related to that question.  
+            1. If a single word is provided instead of a query, consider that word as a query and generate a response related to that query.
+            2. Analyze and understand the question and generate a response. If the question is not appropriate, create an appropriate question yourself and generate output related to that question.
             3. Ensure your response is informative and relevant to the user's query.
-            4. If any question ask regarding harrasment generate appropriate answer for it.
-            5. If user greets you generate response in greeting manner.The user has greeted you (e.g., "Hello," "Hi," "Hey"). Generate a friendly and engaging response that acknowledges the greeting and offers assistance.
-            6. You are a robust and flexible assistant designed to understand and answer questions, even if the user makes spelling mistakes or uses incorrect wording. When given a question, interpret the intent of the question and provide a relevant, accurate answer based on the provided document. If you are unsure of the user's intent due to ambiguous wording, make an educated guess. Always prioritize providing a helpful response.
- 
+            4. If any question asks about harassment, generate an appropriate answer for it.
+            5. If the user greets you, generate a response in a greeting manner. Acknowledge the greeting and offer assistance.
+            6. You are a robust and flexible assistant designed to understand and answer questions, even if the user makes spelling mistakes or uses incorrect wording. Interpret the user's intent and provide a relevant, accurate answer based on the provided document. If unsure of the user's intent due to ambiguous wording, make an educated guess. Always prioritize providing a helpful response.
         """
- 
- 
-        # Use PromptTemplate to structure the input
+
         prompt = PromptTemplate(
             input_variables=["context", "question"],
             template=prompt_template
         )
-        
-        # Initialize the model
+
         llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=GOOGLE_API_KEY,
             temperature=0,
             convert_system_message_to_human=True
         )
-        
-        # Create a QA chain with the retriever and the model
-        qa_chain = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
-        
-        # Retrieve relevant documents for the context
-        # context_docs = retriever.get_relevant_documents(query)
-        # context = "\n".join([doc.page_content for doc in context_docs])
-        
-        # Format the prompt using the retrieved context and user's question
+
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm, 
+            chain_type="stuff", 
+            retriever=retriever, 
+            return_source_documents=True
+        )
+
         formatted_prompt = prompt.format(context=context, question=query)
-        
-        # Run the chain with the formatted prompt
         result = qa_chain({"query": formatted_prompt})
-        
-        # Separate the answer and source documents
+
         answer = result['result']
         source_docs = result['source_documents']
-        
+
         return answer, source_docs
-    
     except Exception as e:
-        st.error(f"An error occurred while generating the answer: ")
+        st.error(f"An error occurred while generating the answer: {str(e)}")
         return None, None
 
-
+# Sidebar UI setup
 st.markdown("""
 <style>
     .stSidebar {
         background-color: #f2a354e0 !important;
-        
     }
-
     """, unsafe_allow_html=True)
 
-with st.sidebar.markdown('', unsafe_allow_html=True):
-    st.image('logo.png',width=300)
+st.sidebar.image('./Image/logo.png', width=300)
 
-query = st.chat_input("Message Insighbot")
-retriever = create_faiss_retriever_from_db()
+# Upload and process document
+uploaded_file = st.file_uploader('Choose your .pdf file', type="pdf")
+if st.button("Upload"):
+    if uploaded_file:
+        insert_document_into_db(uploaded_file)
+    else:
+        st.error('Please select a file to upload')
 
-
- 
+# Initialize chat messages session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
- 
+
+# Display previous messages
 for message in st.session_state.messages:
     with st.chat_message(message['role']):
         st.markdown(message['content'])
- 
 
- 
+# Chat input and response handling
+query = st.chat_input("Message InsightBot")
 if query:
     with st.chat_message("user"):
         st.markdown(query)
-    st.session_state.messages.append({"role":"user", "content":query})
-    answer, source_docs = generate_answer(query, retriever)
+    st.session_state.messages.append({"role": "user", "content": query})
 
-    with st.chat_message('assistant'):
-        st.markdown(answer)
-    st.session_state.messages.append({"role":"assistant","content":answer})
- 
- 
-
-
-
-
-# def initialize_session_state():
+    # Create retriever only once if not already created
+    retriever = create_faiss_retriever_from_db()
+    if retriever:
+        answer, source_docs = generate_answer(query, retriever)
+        if answer:
+            with st.chat_message("assistant"):
+                st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
