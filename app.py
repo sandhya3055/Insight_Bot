@@ -162,10 +162,10 @@ def generate_answer(query, retriever):
 
             1.If is providing any word instead of a query then consider that word as query and generate response realted to that query.
             2. Analyze and understand the question and generate response, If question is not appropriate the create a appropriate question by yourself and generate output related to that question.  
-            4. Ensure your response is informative and relevant to the user's query.
-            5. If any question ask regarding  the harrasment or Sexual harassment generate appropriate answer relevent to query.
-            6. If user greets you generate response in greeting manner.The user has greeted you (e.g., "Hello," "Hi," "Hey"). Generate a friendly and engaging response that acknowledges the greeting and offers assistance.
-
+            3. Ensure your response is informative and relevant to the user's query.
+            4. If any question ask regarding harrasment generate appropriate answer for it.
+            5. If user greets you generate response in greeting manner.The user has greeted you (e.g., "Hello," "Hi," "Hey"). Generate a friendly and engaging response that acknowledges the greeting and offers assistance.
+            6. You are a robust and flexible assistant designed to understand and answer questions, even if the user makes spelling mistakes or uses incorrect wording. When given a question, interpret the intent of the question and provide a relevant, accurate answer based on the provided document. If you are unsure of the user's intent due to ambiguous wording, make an educated guess. Always prioritize providing a helpful response.
  
         """
  
